@@ -1,0 +1,320 @@
+---
+title: "Accidents and Road Traffic Resulting in a Casualty"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(stats19)
+library(tidyverse)
+library(dplyr)
+vignette("stats19")
+acc_2016 = get_stats19(year = 2016, type = "accident")
+cas_2016 = get_stats19(year = 2016, type = "casualty")
+vehic_2016 = get_stats19(year = 2016, type = "vehicle")
+
+
+#acc_2020 = get_stats19(year = 2020, type = "accident")
+#cas_2020=get_stats19(year = 2020, type = "casualty")
+#vehic_2020 = read_csv('casualty_statistics_vehicle_2020.csv')
+#column_names_2020 = names(acc_2020)
+#column_names_2020
+#length(column_names_2020)
+```
+```{r}
+nrow(acc_2016)
+nrow(cas_2016)
+nrow(vehic_2016)
+```
+
+
+```{r}
+#nrow(acc_2020)
+#nrow(cas_2020)
+#nrow(vehic_2020)
+```
+```{r}
+nrow(cas_2016)/nrow(acc_2016)
+nrow(vehic_2016)/nrow(acc_2016)
+```
+The output of the commands above show that there are around 1.33 casualties and 1.85 vehicles involved in each crash record in the STATS19 dataset for 2016
+
+```{r}
+#nrow(cas_2020)/nrow(acc_2020)
+#nrow(vehic_2020)/nrow(acc_2020)
+```
+The output of the commands above show that there are around 1.27 casualties and 1.83 vehicles involved in each crash record in the STATS19 dataset for 2020
+
+#Analysis on STATS19 dataset for 2016 
+
+```{r}
+ncol(acc_2016)
+ncol(cas_2016)
+ncol(vehic_2016)
+
+```
+As we know that there are different number of columns,reporting the characteristics of each casualty and each driver/vehicle for the casualty and vehicle data sets respectively. This shows that we have more variables in the ‘accidents’ 
+table than the others but the others, but the other tables are data rich with 16 columns on the casualties and 23 on the vehicles. To check that the datasets are consistent, we can check that the number of casualties reported in the crashes table is equal to the number of rows in the casualties table, and the same for the vehicles table:
+
+```{r}
+sum(acc_2016$number_of_casualties) == nrow(cas_2016)
+sum(acc_2016$number_of_vehicles) == nrow(vehic_2016)
+```
+Therefore as the data sets are consistent we can further proceed with the analyses. To perform further analyses we will joining the casualty data with the accident data and the vehicle data with the accident data.
+```{r}
+cas_joined_2016 = inner_join(acc_2016, cas_2016)
+vehic_joined_2016 = inner_join(acc_2016, vehic_2016)
+```
+
+
+
+```{r}
+acc_sf_2016 = format_sf(acc_2016)
+library(sf)
+
+table(acc_sf_2016$police_force)
+police_land = c("West Midlands", "Leicestershire","Derbyshire","Lincolnshire","Nottinghamshire","Warwickshire","Staffordshire")
+crash_land = acc_sf_2016 %>% 
+ filter(police_force %in% police_land)
+cas_land = cas_2016 %>% 
+ filter(accident_index %in% crash_land$accident_index)
+types_cas_2016 = cas_land %>% 
+  select(accident_index, casualty_type) %>% 
+  group_by(accident_index) %>%
+  summarise(Total = n(),
+  walking = sum(casualty_type == "Pedestrian"),
+  cycling = sum(casualty_type == "Cyclist"),
+  passenger = sum(casualty_type == "Car occupant")
+  )
+spat_plot = left_join(crash_land, types_cas_2016)
+library(ggplot2)
+types_acc_2016 = spat_plot %>% 
+ filter(accident_severity != "Slight") %>% 
+ mutate(type = case_when(
+ walking > 0 ~ "Walking",
+ cycling > 0 ~ "Cycling",
+ passenger > 0 ~ "Passenger",
+ TRUE ~ "Other"
+ ))
+ggplot(types_acc_2016, aes(size = Total, colour = speed_limit)) +
+ geom_sf(show.legend = "point", alpha = 0.3) +
+ facet_grid(vars(type), vars(accident_severity)) +
+ scale_size(
+ breaks = c(1:3, 12),
+ labels = c(1:2, "3+", 12)
+ ) +
+ scale_color_gradientn(colours = c("blue", "yellow", "red")) +
+ theme(axis.text = element_blank(), axis.ticks = element_blank())
+
+
+```
+
+```{r}
+acc_sf_2016 %>% 
+  filter(accident_severity == "Slight") %>% 
+  select(slight_severity_cases = accident_index) %>% 
+  aggregate(by = police_boundaries, FUN = length) %>% 
+  plot()
+```
+# Question 1: Speed limit <=40 , Analyse for pedestrians, cyclists, ##disabled(blue badge).. factors and region over the years measurements taken to improve.
+```{r}
+acc_filtered = cas_joined_2016 %>%
+ filter(casualty_type %in% c("Pedestrian","Cyclist")&speed_limit <= 40)
+acc_filtered_sf= format_sf(acc_filtered)
+
+#acc_filtered_sf=acc_filtered_sf%>%mutate(severity = case_when(casualty_severity=='Slight'~1,casualty_severity=='Serious'~2,casualty_severity=='Fatal'~3))
+#suppressWarnings(acc_filtered_sf <- data.frame(lapply(acc_filtered_sf, function(x) as.numeric(as.character(x)))))
+library(SearchTrees)
+library(mapdata)
+UK_df <- map_data("world") %>% filter(region=="UK")
+df= world.cities %>% filter(country.etc=="UK")
+tree_Uk_df<- createTree(df,columns=c(4,5)) #columns is the number of columns with latitude and longitude
+acc.map.uk<-acc_filtered_sf %>% 
+  filter(accident_severity=="Fatal")%>%
+  group_by(longitude,latitude) %>% 
+  summarize(total_fatal_accidents=n_distinct(accident_index))
+#K-nearest neighboor lookup
+#All the accidents will be mapped to the nearest city based on the long/lat values
+acc.map.uk$city.idx<-knnLookup(tree_Uk_df,acc.map.uk$latitude,acc.map.uk$longitude,k=1)
+acc.map.uk<- acc.map.uk %>%
+              group_by(city.idx) %>% 
+              summarize(total_fatal_accidents=sum(total_fatal_accidents))
+acc.map.uk$city<-df$name[acc.map.uk$city.idx]
+
+acc.map.uk$pop<-df$pop[acc.map.uk$city.idx]
+acc.map.uk$lat<-df$lat[acc.map.uk$city.idx]
+acc.map.uk$long<-df$long[acc.map.uk$city.idx]
+acc.map.uk$ratio.acc<-round((acc.map.uk$total_fatal_accidents/acc.map.uk$pop)/10,6)
+p=acc.map.uk %>%
+  arrange(ratio.acc) %>%
+  mutate( city=factor(city, unique(city))) %>%
+  mutate( mytext=paste("City: ", city, "\n", "Fatal Accidents: ", total_fatal_accidents,
+                       "\n", "Population: ", pop,
+                          "\n", "Ratio Fatal Accidents/Pop: ", ratio.acc,sep="")) %>%  ggplot() +
+    geom_polygon(data = UK_df, aes(x=long, y = lat, group = group), fill="grey", alpha=0.3) +
+    geom_point(aes(x=long, y=lat, size=ratio.acc, color=ratio.acc, text=mytext, alpha=ratio.acc) ) +
+    scale_size_continuous(range=c(1,7)) +
+    scale_color_viridis_d(option="inferno" ) +
+    scale_alpha_continuous() +
+    theme_void() +
+    ylim(50,59) +
+    coord_map() +
+    theme()
+
+#devtools::install_github("ropensci/plotly")
+
+p= ggplotly(p, tooltip="text")
+p
+
+```
+
+```{r,fig.width=10,fig.height=5}
+acc_2016_raw = get_stats19(year = 2016, type = "accident", ask = FALSE, format = FALSE)
+cas_2016_raw = get_stats19(year = 2016, type = "casualty", ask = FALSE, format = FALSE)
+cas_joined_raw_2016 = inner_join(acc_2016_raw, cas_2016_raw)
+acc_filtered_raw = cas_joined_raw_2016 %>%
+ filter(casualty_type %in% c(0,1) & speed_limit <= 40)
+suppressWarnings(acc_filtered_raw <- data.frame(lapply(acc_filtered_raw, function(x) as.numeric(as.character(x)))))
+
+
+library(ggplot2)
+library(reshape2)
+qplot(x = Var1, y = Var2,
+      data = melt(cor(acc_filtered_raw)),
+      fill = value,
+      geom = "tile")+
+      theme(axis.text.x=element_text(angle =-40,hjust =0,vjust = 0.7))
+
+```
+
+```{r}
+cor_res <- cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$local_authority_district, 
+                    method = "pearson")
+cor_res
+
+cor_res_1 <-cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$first_road_class, 
+                    method = "pearson")
+cor_res_1
+
+cor_res_2 <-cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$weather_conditions, 
+                    method = "pearson")
+cor_res_2
+
+cor_res_3 <-cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$light_conditions, 
+                    method = "pearson")
+cor_res_3
+
+cor_res_4 <-cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$urban_or_rural_area, 
+                    method = "pearson")
+cor_res_4
+
+cor_res_5 <-cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$road_surface_conditions, 
+                    method = "pearson")
+cor_res_5
+
+cor_res_6 <-cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$pedestrian_crossing_human_control, 
+                    method = "pearson")
+cor_res_6
+
+cor_res_7 <-cor.test(acc_filtered_raw$accident_severity, acc_filtered_raw$pedestrian_crossing_physical_facilities, 
+                    method = "pearson")
+cor_res_7
+
+```
+
+
+
+
+# Question 2: Highest accidental region (Top 3) and Correlation of highest contributing factors with speed limit. Also, Compare them over the years with respect to speed limit? Has the road safety improved?
+
+```{r, fig.width=10,fig.height=5}
+acc_region_2016=cas_joined_2016%>%mutate(across(c(police_force),factor))
+acc_region_2016$police_force %>% 
+  levels()
+acc_region_2016 = cas_joined_2016%>% group_by(accident_index)
+acc_region_2016 = acc_region_2016%>% group_by(police_force)
+ggplot(data = acc_region_2016) + 
+  geom_point(aes(x = acc_region_2016$police_force, y = acc_region_2016$number_of_casualties , color = acc_region_2016$accident_severity )) +
+  geom_smooth(method = "lm", aes(x = acc_region_2016$police_force , y = acc_region_2016$number_of_casualties, color =acc_region_2016$accident_severity), se = FALSE)+
+  theme(axis.text.x=element_text(angle =- 120, vjust = 0.5))
+
+```
+According to the above plot, the top three regions with highest accidental count are North Yorkshire, Devon and Cornwall and Derbyshire. 
+
+Correlation of the factors, to find highest which factors contribute the most.
+
+```{r,fig.width=10,fig.height=6}
+acc_2016_raw = get_stats19(year = 2016, type = "accident", ask = FALSE, format = FALSE)
+cas_2016_raw = get_stats19(year = 2016, type = "casualty", ask = FALSE, format = FALSE)
+cas_joined_raw_2016 = inner_join(acc_2016_raw, cas_2016_raw)
+suppressWarnings(cas_joined_raw_2016 <- data.frame(lapply(cas_joined_raw_2016, function(x) as.numeric(as.character(x)))))
+
+#cor(cas_joined_raw_2016[,unlist(lapply(cas_joined_raw_2016, is.numeric))])
+
+
+library(ggplot2)
+library(reshape2)
+qplot(x = Var1, y = Var2,
+      data = melt(cor(cas_joined_raw_2016)),
+      fill = value,
+      geom = "tile")+
+      theme(axis.text.x=element_text(angle =-40,hjust =0,vjust = 0.7))
+
+
+cor_res_1 <- cor.test(cas_joined_raw_2016$speed_limit, cas_joined_raw_2016$number_of_casualties, 
+                    method = "pearson")
+cor_res_1
+
+cas_joined_raw_2016= cas_joined_raw_2016%>% filter(accident_severity==2)
+count_cas=count(cas_joined_raw_2016)
+count_cas
+cas_joined_raw_2016= cas_joined_raw_2016%>% filter(accident_severity==2 & speed_limit>=60)
+cas_count = length(cas_joined_raw_2016$accident_severity)
+cas_count
+
+
+
+```
+As we can see that speed limit has a quite a contribution factor for the fatal cases. Among total 30,104 Fatal cases there are 9460 cases where speed limit contributes. Therefore, 31.4% is the contribution of speed limit of severity being fatal.
+
+## Over the years with respect to Speed limit.
+```{r,fig.width=10,fig.height=6}
+acc_2020_raw = get_stats19(year = 2020, type = "accident", ask = FALSE, format = FALSE)
+cas_2020_raw = get_stats19(year = 2020, type = "casualty", ask = FALSE, format = FALSE)
+cas_joined_raw_2020 = inner_join(acc_2020_raw, cas_2020_raw)
+suppressWarnings(cas_joined_raw_2020 <- data.frame(lapply(cas_joined_raw_2020, function(x) as.numeric(as.character(x)))))
+
+#cor(cas_joined_raw_2020[,unlist(lapply(cas_joined_raw_2020, is.numeric))])
+
+
+library(ggplot2)
+library(reshape2)
+qplot(x = Var1, y = Var2,
+      data = melt(cor(cas_joined_raw_2020)),
+      fill = value,
+      geom = "tile")+
+      theme(axis.text.x=element_text(angle =-40,hjust =0,vjust = 0.7))
+
+
+cor_res_1 <- cor.test(cas_joined_raw_2020$speed_limit, cas_joined_raw_2020$number_of_casualties, 
+                    method = "pearson")
+cor_res_1
+
+cas_joined_raw_2020= cas_joined_raw_2020%>% filter(accident_severity==2)
+count_cas=count(cas_joined_raw_2020)
+count_cas
+cas_joined_raw_2020= cas_joined_raw_2020%>% filter(accident_severity==2 & speed_limit>=60)
+cas_count = length(cas_joined_raw_2020$accident_severity)
+cas_count
+
+```
+As we can see that speed limit has a quite a contribution factor for the fatal cases. Among total 24,495 Fatal cases there are 6602 cases where speed limit contributes. Therefore, 26.9% is the contribution of speed limit of severity being fatal, but has reduced over the years.
+
+
+
+
